@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>react-fiber</title>
+</head>
+<body>
+     <div id = "app"></div>
+     <script type = "text/javascript">
+            (function(global,factory){
+                factory(global.React = {})
+            })(this,function(exports){
+
+            let workInProgressRoot = null;
+            let currentRoot = null;
+            let nextUnitOfWork = null;
+            let deletions = null;
+            let state = null;
+
+            let workLoop = (deadline) =>{
+                 while(nextUnitOfWork&&deadline.timeRemaining()>1){
+                    nextUnitOfWork = performUnitOfWork(nextUnitOfWork);
+                 }
+                 if(!nextUnitOfWork&&workInProgressRoot){
+                    commitRoot();
+                 }
+                 requestIdleCallback(workLoop);
+            }
+
+            requestIdleCallback(workLoop);
+
+             //当子元素是text节点的时候，我们给它包装一层
+            function createTextVDom(text){
+                 return {
+                     type:"text",
+                     props:{
+                         nodeValue:text,
+                         children:[]
+                     }
+                 }
+             }
+             //DOM元素三大金刚，类型，属性，子元素
+            function createElement(type,props,...children){
+                    return {
+                        type:type,
+                        props:{
+                            ...props,
+                            children:children.map(item=>{
+                                item = typeof item === 'object' ? item : createTextVDom(item);
+                                return item;
+                            })
+                        }
+                    }
+            }
+
+            // 创建DOM的操作
+            function createDom(vDom) {
+            let dom;
+            // 检查当前节点是文本还是对象
+            if(vDom.type === 'text') {
+                dom = document.createTextNode(vDom.props.nodeValue);
+            } else {
+                dom = document.createElement(vDom.type);
+
+                // 将vDom上除了children外的属性都挂载到真正的DOM上去
+                if(vDom.props) {
+                Object.keys(vDom.props)
+                    .filter(key => key !== 'children')
+                    .forEach(item => {
+                    if(item.indexOf('on') === 0) {
+                        dom.addEventListener(item.substr(2).toLowerCase(), vDom.props[item], false);
+                    } else {
+                        dom[item] = vDom.props[item];
+                    }
+                    })
+                }
+            }
+
+            return dom;
+            }
+
+            // 更新DOM的操作
+            function updateDom(dom, prevProps, nextProps) {
+            Object.keys(prevProps)
+                .filter(name => name !== 'children')
+                .filter(name => !(name in nextProps))
+                .forEach(name => {
+                if(name.indexOf('on') === 0) {
+                    dom.removeEventListener(name.substr(2).toLowerCase(), prevProps[name], false);
+                } else {
+                    dom[name] = '';
+                }
+                });
+
+            Object.keys(nextProps)
+                .filter(name => name !== 'children')
+                .forEach(name => {
+                if(name.indexOf('on') === 0) {
+                    dom.addEventListener(name.substr(2).toLowerCase(), nextProps[name], false);
+                } else {
+                    dom[name] = nextProps[name];
+                }
+                });
+            }
+
+            //删除dom节点操作
+
+            function commitDeletion(fiber,parentDom){
+                if(fiber.dom){
+                    domParent.removeChild(fiber.dom);
+                }
+                else{
+                    commitDeletion(fiber.child,parentDom);
+                }
+            }
+
+            //将我们生成的虚拟dom渲染到页面上
+            function render(vDom,container){
+                workInProgressRoot = {
+                    dom: container,
+                    props: {
+                    children: [vDom]
+                    },
+                    alternate: currentRoot
+                }
+                nextUnitOfWork = workInProgressRoot;
+                deletions = [];
+            }
+
+            //创建新的fiber节点
+            function buildNewFiber(fiber, workInProgressFiber) {
+                return {
+                    type: fiber.type,
+                    props: fiber.props,
+                    dom: null,                    // 构建fiber时没有dom，下次perform这个节点是才创建dom  
+                    return: workInProgressFiber,
+                    alternate: null,              // 新增的没有老状态
+                    effectTag: 'REPLACEMENT'      // 添加一个操作标记
+                }
+            }
+            //创建下一个fiber
+            function buildNewNextFiber(workInProgress,vDom,obj = {}){
+                  return {
+                      type:vDom.type,
+                      props:vDom.props,
+                      dom:null,
+                      return:workInProgress,
+                      alternate:null,
+                      effectTag:'REPLACEMENT',
+                      ...obj
+                  }
+            }
+            //调和子元素
+            function reconcileChildren(workInProgress,vDom){
+               let oldFiber = workInProgress.alternate&&workInProgress.alternate.child;//获取出前一个元素的子元素
+               let tempFiber = null;//临时储存fiber
+               //如果有需要对比的子元素
+               if(vDom&&vDom.length){
+                   if(!oldFiber){
+                        //第一次渲染的时候所有的节点都是新增
+                        vDom.forEach((element,index)=>{
+                            let newNextFiber = buildNewNextFiber(workInProgress,element);
+                            if(index===0){
+                                workInProgress.child = newNextFiber;
+                            }
+                            else{
+                                tempFiber.sibling = newNextFiber;
+                            }
+                            tempFiber = newNextFiber;
+                        })
+                   }
+                   else{
+                       let index = 0;
+                       while(index<vDom.length||oldFiber){
+                        let element = vDom[index];
+                        let sameType = oldFiber.type===element.type;//检测类型是否一样
+                        let newNextFiber = null;
+                        if(sameType){
+                           updateProperty = {
+                            type:oldFiber.type,
+                            dom:oldFiber.dom,
+                            effectTag:"UPDATE",
+                            alternate:oldFiber
+                           }
+                           newNextFiber = buildNewNextFiber(workInProgress,element,updateProperty)
+                        }
+                        else{
+                            //如果新的树有元素，那么直接用新树的元素
+                           if(element){
+                                newNextFiber = buildNewNextFiber(workInProgress,element)
+                           }
+                           //如果新树没得元素。并且老树有元素，那么删除老树的元素
+                           if(!element&&oldFiber){
+                            oldFiber.effectTag = 'DELETION';
+                            deletions.push(oldFiber);
+                           }
+                        }
+                        if(index === 0){
+                            workInProgress.child = newNextFiber;
+                        }
+                        else{
+                            tempFiber.sibling = newNextFiber;
+                        }
+                        oldFiber = oldFiber.sibling;
+                        tempFiber = newNextFiber;
+                        index++;
+                       }
+                   }
+               }
+
+            }
+
+            //将单个子元素转化为fiber结构并返回
+            function performUnitOfWork(fiber){           
+                let isFunctionComponent = typeof fiber.type ==="function";
+                if(isFunctionComponent){
+                    let children = [fiber.type(fiber.props)];
+                    reconcileChildren(fiber,children);
+                }
+                else{
+                    if(!fiber.dom){
+                        fiber.dom = createDom(fiber);
+                    }
+                    reconcileChildren(fiber,fiber.props.children);
+                }
+                
+                if(fiber.child){
+                    return fiber.child;
+                }
+                let nextFiber = fiber;
+                while(nextFiber){
+                   if(nextFiber.sibling){
+                       return nextFiber.sibling;
+                   }
+                   nextFiber = nextFiber.return;
+                }
+            }
+
+             // 统一操作DOM
+            function commitRoot() {
+                commitRootImpl(workInProgressRoot.child);    // 开启递归
+                deletions.forEach(commitRootImpl);//删除所有数据
+                currentRoot = workInProgressRoot;
+                workInProgressRoot = null;     // 操作完后将workInProgressRoot重置
+            }
+
+            function commitRootImpl(fiber){
+                if(!fiber){
+                    return;
+                }
+                let parentFiber = fiber.return;
+                while(!parentFiber.dom){
+                    parentFiber = parentFiber.return;
+                }
+                let parentDom = parentFiber.dom;
+
+                if(fiber.effectTag=="REPLACEMENT"&&fiber.dom){
+                    parentDom.appendChild(fiber.dom);
+                }
+                else if(fiber.effectTag=="UPDATE"&&fiber.dom){
+                     updateDom(fiber.dom,fiber.alternate.props,fiber.props)
+                }
+                else if(fiber.effectTag=="DELETION"){
+                    commitDeletion(fiber,parentDom)
+                }
+                commitRootImpl(fiber.child);
+                commitRootImpl(fiber.sibling);
+            }
+
+            function useState(init) {
+
+            state = state === null ? init : state;
+
+            // 修改state的方法
+            const setState = value => {
+                state = value;
+
+                // 只要修改了state，我们就需要重新处理节点
+                workInProgressRoot = {
+                dom: currentRoot.dom,
+                props: currentRoot.props,
+                alternate: currentRoot
+                }
+
+                // 修改nextUnitOfWork指向workInProgressRoot，这样下次就会处理这个节点了
+                nextUnitOfWork = workInProgressRoot;
+                deletions = [];
+            }
+
+            return [state, setState]
+            }
+            exports.createElement = createElement;
+            exports.render = render;
+            exports.useState = useState;
+            })   
+    
+    
+    </script>
+    <script src="babel.min.js"></script>
+    <script type = "text/babel">
+        function App(props) {
+            const [count, setCount] = React.useState(1);
+            const onClickHandler = () => {
+                setCount(count + 1);
+            }
+            return (
+                <div>
+                <h1>Count: {count}</h1>
+                <button onClick={onClickHandler}>Count+1</button>
+                </div>
+            );
+            }
+            React.render(<App/>,document.querySelector("#app"))
+    </script>
+</body>
+</html>
